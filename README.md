@@ -1,9 +1,9 @@
 # SAS-Simulation
 Open-source SAS simulator featuring a Python-based sonar image reconstruction and an interactive HTML visualization of underwater echo propagation.
 
-![SAS Simulator Screenshot](media/sas.png)
+![SAS Simulator Screenshot](sas.png)
 
-[▶️ Watch SAS Simulation Video](media/SAS-simulator.mp4)
+[▶️ Watch SAS Simulation Video](SAS-simulator.mp4)
 
 ---
 
