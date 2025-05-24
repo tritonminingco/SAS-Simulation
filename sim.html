@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=600, initial-scale=1.0">
+  <title>Synthetic Aperture Sonar (SAS) Simulation</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #121212; color: #f0f0f0; text-align: center; padding: 20px; }
+    canvas { border: 1px solid #555; background: #000; margin-top: 20px; }
+    .controls { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Synthetic Aperture Sonar (SAS) Simulation</h1>
+  <p>This simulation shows how a moving sonar platform collects echo data and reconstructs a seabed image using backprojection.</p>
+  <canvas id="sonarCanvas" width="600" height="300"></canvas>
+
+  <script>
+// Get canvas and context for drawing
+const canvas = document.getElementById('sonarCanvas');
+const ctx = canvas.getContext('2d');
+
+// Canvas and simulation parameters
+const width = canvas.width;
+const height = canvas.height;
+const sonarY = 50;         // Y position of the sonar platform (top of water)
+const sonarSpeed = 2;      // How fast the sonar platform moves horizontally
+const pulseSpeed = 8;      // How fast the sonar pulse expands
+const seabedY = 240;       // Baseline Y position for the seabed
+
+// Seabed animation phase (used to animate the seabed gently)
+let seabedPhase = 0;
+
+// Generate a smooth, animated seabed profile (returns array of {x, y})
+function getSeabedProfile(phase = 0) {
+  const points = [];
+  for (let x = 0; x <= width; x += 2) {
+    // Multiple sine/cosine waves for realistic undulation, plus gentle phase animation
+    const y =
+      seabedY +
+      12 * Math.sin(x / 60 + phase) +
+      7 * Math.sin(x / 23 + phase * 0.7) +
+      3 * Math.sin(x / 120 + phase * 1.3) +
+      2 * Math.cos(x / 17 + phase * 1.7);
+    points.push({ x, y });
+  }
+  return points;
+}
+
+// Target positions (x only, z will be set dynamically based on seabed)
+const targetXs = [300, 150, 450];
+const targetReflectivities = [1.0, 0.7, 0.5]; // How "bright" each target is
+
+// Animation state variables
+let position = 0;      // Current sonar platform x position
+let pulseRadius = 0;   // Current radius of the sonar pulse
+let pulseActive = true;// Whether the pulse is currently expanding
+
+// Draw the seabed, including rocks and plants for realism
+function drawSeabed(seabedProfile) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(0, height);
+  seabedProfile.forEach((pt) => ctx.lineTo(pt.x, pt.y));
+  ctx.lineTo(width, height);
+  ctx.closePath();
+
+  // Sand/rock gradient fill for the seabed
+  const grad = ctx.createLinearGradient(0, seabedY, 0, height);
+  grad.addColorStop(0, "#3e2f1c");
+  grad.addColorStop(0.5, "#7c5b2a");
+  grad.addColorStop(1, "#2e1d0e");
+  ctx.fillStyle = grad;
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1.0;
+
+  // Draw rocks at fixed positions for visual stability
+  for (let i = 0; i < 16; i++) {
+    const px = (i + 1) * (width / 17) + Math.sin(seabedPhase + i) * 8;
+    const idx = Math.min(Math.round(px / 2), seabedProfile.length - 1);
+    const py = seabedProfile[idx].y - 2 - Math.abs(Math.sin(seabedPhase + i)) * 8;
+    ctx.beginPath();
+    ctx.arc(px, py, 3 + Math.abs(Math.sin(i)) * 4, 0, 2 * Math.PI);
+    ctx.fillStyle = "#444";
+    ctx.globalAlpha = 0.5 + Math.abs(Math.sin(i)) * 0.3;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+  }
+
+  // Draw plants at fixed positions for visual stability
+  for (let i = 0; i < 10; i++) {
+    const px = (i + 1) * (width / 11) + Math.cos(seabedPhase + i) * 6;
+    const idx = Math.min(Math.round(px / 2), seabedProfile.length - 1);
+    const py = seabedProfile[idx].y - 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px, py - 14 - Math.abs(Math.sin(seabedPhase + i)) * 12);
+    ctx.strokeStyle = "#1fa34a";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6 + Math.abs(Math.cos(i)) * 0.3;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+    ctx.lineWidth = 1;
+  }
+  ctx.restore();
+}
+
+// Get the vertical (z) position for a target, just above the seabed at x
+function getTargetZ(x, seabedProfile) {
+  const idx = Math.min(Math.round(x / 2), seabedProfile.length - 1);
+  return seabedProfile[idx].y - 12;
+}
+
+// Draw the entire scene: seabed, sonar, pulse, targets, and echo paths
+function drawScene(currentX, pulseR, seabedProfile, targets) {
+  ctx.clearRect(0, 0, width, height);
+
+  // Draw seabed with details
+  drawSeabed(seabedProfile);
+
+  // Draw sonar path (horizontal line)
+  ctx.strokeStyle = '#00ffff';
+  ctx.beginPath();
+  ctx.moveTo(0, sonarY);
+  ctx.lineTo(width, sonarY);
+  ctx.stroke();
+
+  // Draw sonar platform (moving green circle)
+  ctx.fillStyle = '#00ff00';
+  ctx.beginPath();
+  ctx.arc(currentX, sonarY, 7, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Draw expanding sonar pulse (faint blue circle)
+  if (pulseActive) {
+    ctx.save();
+    ctx.globalAlpha = 0.15;
+    ctx.strokeStyle = '#00ffff';
+    ctx.beginPath();
+    ctx.arc(currentX, sonarY, pulseR, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw each target and its echo path if reached by the pulse
+  targets.forEach(t => {
+    // Draw target (red circle, size by reflectivity)
+    ctx.fillStyle = '#ff0000';
+    ctx.beginPath();
+    ctx.arc(t.x, t.z, 8 * t.reflectivity, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Draw echo path and echo return if pulse reached target
+    const dx = t.x - currentX;
+    const dz = t.z - sonarY;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (pulseR >= dist && pulseActive) {
+      // Echo path (dashed white line)
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(currentX, sonarY);
+      ctx.lineTo(t.x, t.z);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Echo return (faint yellow circle at echo distance)
+      ctx.save();
+      ctx.globalAlpha = 0.3 * t.reflectivity;
+      ctx.strokeStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.arc(currentX, sonarY, dist, 0, 2 * Math.PI);
+      ctx.stroke();
+      ctx.restore();
+    }
+  });
+}
+
+// Main animation loop
+function animate() {
+  seabedPhase += 0.003; // Very slow movement for realism
+  const seabedProfile = getSeabedProfile(seabedPhase);
+
+  // Update targets to always sit just above the seabed
+  const targets = targetXs.map((x, i) => ({
+    x,
+    z: getTargetZ(x, seabedProfile),
+    reflectivity: targetReflectivities[i]
+  }));
+
+  drawScene(position, pulseRadius, seabedProfile, targets);
+
+  // Animate pulse expansion
+  if (pulseActive) {
+    pulseRadius += pulseSpeed;
+    if (pulseRadius > Math.max(width, height)) {
+      pulseActive = false;
+    }
+  } else {
+    position += sonarSpeed;
+    pulseRadius = 0;
+    pulseActive = true;
+  }
+
+  // Stop animation at end of canvas
+  if (position > width) {
+    return;
+  }
+  requestAnimationFrame(animate);
+}
+
+// Start animation
+animate();
+  </script>
+</body>
+</html>
